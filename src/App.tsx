@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
+import { motion, AnimatePresence, Reorder, useDragControls } from 'motion/react';
 import { 
   Plus, 
   Settings as SettingsIcon, 
@@ -46,7 +46,11 @@ import {
   Timer,
   Cloud,
   Star,
-  Smile
+  Smile,
+  GripVertical,
+  BarChart3,
+  Smartphone,
+  Bell
 } from 'lucide-react';
 
 const ICON_MAP: Record<string, any> = {
@@ -55,8 +59,14 @@ const ICON_MAP: Record<string, any> = {
 };
 import { useLiveQuery } from 'dexie-react-hooks';
 import { format, startOfToday, subDays, eachDayOfInterval, isSameDay, parseISO, isBefore, startOfDay } from 'date-fns';
-import { db, type Habit, type HabitLog } from './db';
+import { db, type Habit, type HabitLog, type Settings } from './db';
 import { cn, hexToRgb } from './lib/utils';
+
+import { 
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+  BarChart, Bar, Cell, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
+  AreaChart, Area
+} from 'recharts';
 
 // --- Streak Utility ---
 const calculateStreak = (habit: Habit, logs: HabitLog[]) => {
@@ -65,9 +75,7 @@ const calculateStreak = (habit: Habit, logs: HabitLog[]) => {
   const todayStr = format(current, 'yyyy-MM-dd');
   const todayLogEntry = logs.find(l => l.date === todayStr);
   
-  // If today is not completed, we start checking from yesterday
   if (todayLogEntry?.status !== 'completed') {
-    // If strict mode and today is skipped, streak is already broken
     if (habit.isStrict && todayLogEntry?.status === 'skipped') return 0;
     current = subDays(current, 1);
   }
@@ -81,72 +89,123 @@ const calculateStreak = (habit: Habit, logs: HabitLog[]) => {
       current = subDays(current, 1);
     } else if (log?.status === 'skipped') {
       if (habit.isStrict) {
-        break; // Strict mode: skip breaks streak
+        break;
       } else {
-        current = subDays(current, 1); // Normal mode: skip preserves streak but doesn't increment
+        current = subDays(current, 1);
       }
     } else {
-      // No log found for this day
-      // Check if it's before the habit was created
       if (isBefore(current, startOfDay(habit.createdAt))) break;
-      
-      // If it's a missing day, streak breaks regardless of mode
       break;
     }
   }
   return count;
 };
 
-// --- Sound Utility ---
-const FREQUENCY_MAP: Record<number, number> = {
-  1: 200,
-  2: 400,
-  3: 800,
-  4: 1600,
-  5: 3200,
-  6: 6400
+const calculateLongestStreak = (habit: Habit, logs: HabitLog[]) => {
+  let maxStreak = 0;
+  let currentStreak = 0;
+  
+  const sortedLogs = [...logs].sort((a, b) => a.date.localeCompare(b.date));
+  const logMap = new Map(sortedLogs.map(l => [l.date, l.status]));
+  
+  const days = eachDayOfInterval({ 
+    start: startOfDay(habit.createdAt), 
+    end: startOfToday() 
+  });
+  
+  for (const day of days) {
+    const dateStr = format(day, 'yyyy-MM-dd');
+    const status = logMap.get(dateStr);
+    
+    if (status === 'completed') {
+      currentStreak++;
+      if (currentStreak > maxStreak) maxStreak = currentStreak;
+    } else if (status === 'skipped') {
+      if (habit.isStrict) {
+        currentStreak = 0;
+      }
+    } else {
+      currentStreak = 0;
+    }
+  }
+  
+  return maxStreak;
 };
 
-const playSyncSound = (preset: string = 'Cyber Chime', level: number = 3) => {
+const triggerHaptic = (type: 'completed' | 'skipped', settings?: Settings) => {
+  if (!settings?.hapticEnabled) return;
+  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+    if (type === 'completed') {
+      navigator.vibrate(50);
+    } else {
+      navigator.vibrate(100);
+    }
+  }
+};
+
+// --- Sound Utility ---
+const FREQUENCY_MAP: Record<number, number> = {
+  1: 150,
+  2: 300,
+  3: 600,
+  4: 1200,
+  5: 2400,
+  6: 4800
+};
+
+const playSyncSound = (preset: string = 'Starlink Alpha', level: number = 3, type: 'completed' | 'skipped' = 'completed') => {
   const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
   
-  // Resume context if suspended (browser policy)
   if (audioCtx.state === 'suspended') {
     audioCtx.resume();
   }
 
   const oscillator = audioCtx.createOscillator();
   const gainNode = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
 
-  oscillator.connect(gainNode);
+  oscillator.connect(filter);
+  filter.connect(gainNode);
   gainNode.connect(audioCtx.destination);
 
   const now = audioCtx.currentTime;
-  const baseFreq = FREQUENCY_MAP[level] || 800;
+  const baseFreq = FREQUENCY_MAP[level] || 600;
 
-  if (preset.includes('Starlink') || preset === 'Cyber Chime') {
+  if (preset.includes('Starlink')) {
+    // Starklink Tesla Sound: Clean, resonant, futuristic
     oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(baseFreq, now);
-    oscillator.frequency.exponentialRampToValueAtTime(baseFreq * 2, now + 0.1);
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(type === 'completed' ? baseFreq * 2 : baseFreq, now);
+    filter.Q.setValueAtTime(10, now);
+    
+    oscillator.frequency.setValueAtTime(type === 'completed' ? baseFreq : baseFreq * 0.5, now);
+    oscillator.frequency.exponentialRampToValueAtTime(type === 'completed' ? baseFreq * 0.5 : baseFreq * 0.2, now + 0.5);
+    
+    gainNode.gain.setValueAtTime(0.2, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    
+    oscillator.start(now);
+    oscillator.stop(now + 0.5);
+  } else if (preset === 'Neural Uplink' || preset === 'Quantum Pulse') {
+    oscillator.type = 'square';
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(baseFreq, now);
+    
+    oscillator.frequency.setValueAtTime(baseFreq * 2, now);
+    oscillator.frequency.exponentialRampToValueAtTime(baseFreq, now + 0.2);
+    
     gainNode.gain.setValueAtTime(0.1, now);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-    oscillator.start(now);
-    oscillator.stop(now + 0.3);
-  } else if (preset === 'Neural Beep' || preset === 'Orbital Ping') {
-    oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(baseFreq * 1.5, now);
-    gainNode.gain.setValueAtTime(0.05, now);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-    oscillator.start(now);
-    oscillator.stop(now + 0.1);
-  } else {
-    // Default fallback for other presets
-    oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(baseFreq, now);
-    gainNode.gain.setValueAtTime(0.05, now);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    
     oscillator.start(now);
     oscillator.stop(now + 0.2);
+  } else {
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(baseFreq, now);
+    gainNode.gain.setValueAtTime(0.1, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    oscillator.start(now);
+    oscillator.stop(now + 0.3);
   }
 
   // Simulated Haptic (Screen Shake)
@@ -472,13 +531,14 @@ const Typewriter = ({ text, className, speed = 150, delay = 2000 }: { text: stri
   );
 };
 
-const HabitCard = ({ 
+const HabitCard = memo(({ 
   habit, 
   onLog, 
   onEdit, 
   onDelete,
   onExpandChange,
-  onKeyboardActive
+  onKeyboardActive,
+  settings
 }: { 
   key?: React.Key;
   habit: Habit; 
@@ -487,11 +547,11 @@ const HabitCard = ({
   onDelete: (id: number) => Promise<void>;
   onExpandChange?: (expanded: boolean) => void;
   onKeyboardActive?: (active: boolean) => void;
+  settings?: Settings;
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   const [note, setNote] = useState('');
-  
   const [isSaved, setIsSaved] = useState(false);
   
   const logs = useLiveQuery(() => db.logs.where('habitId').equals(habit.id!).toArray(), [habit.id]);
@@ -525,8 +585,10 @@ const HabitCard = ({
 
   const handleDragEnd = (_: any, info: any) => {
     if (info.offset.x > 100) {
+      triggerHaptic('completed', settings);
       onLog(habit.id!, 'completed');
     } else if (info.offset.x < -100) {
+      triggerHaptic('skipped', settings);
       onLog(habit.id!, 'skipped');
     }
     setDragX(0);
@@ -538,214 +600,241 @@ const HabitCard = ({
     onExpandChange?.(next);
   };
 
+  const dragControls = useDragControls();
+
   return (
-    <motion.div 
-      layout
-      drag="x"
-      dragConstraints={{ left: 0, right: 0 }}
-      dragElastic={0.7}
-      onDrag={(e, info) => setDragX(info.offset.x)}
-      onDragEnd={handleDragEnd}
-      className="glass-panel rounded-2xl p-4 mb-4 relative overflow-hidden group touch-none cursor-grab active:cursor-grabbing"
+    <Reorder.Item 
+      value={habit}
+      dragListener={false}
+      dragControls={dragControls}
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      className="relative"
     >
-      {/* Swipe Indicators */}
-      <div className={cn(
-        "absolute inset-y-0 left-0 w-20 flex items-center justify-center transition-opacity pointer-events-none",
-        dragX > 20 ? "opacity-100" : "opacity-0"
-      )}>
-        <Check className="w-8 h-8 animate-pulse" style={{ color: habit.color || 'var(--color-aura-glow)' }} />
-      </div>
-      <div className={cn(
-        "absolute inset-y-0 right-0 w-20 flex items-center justify-center transition-opacity pointer-events-none",
-        dragX < -20 ? "opacity-100" : "opacity-0"
-      )}>
-        <X className="w-8 h-8 text-amber-500 animate-pulse" />
-      </div>
-
       <motion.div 
-        style={{ x: dragX }}
-        className="relative z-10"
+        layout
+        drag="x"
+        dragConstraints={{ left: 0, right: 0 }}
+        dragElastic={0.7}
+        onDrag={(e, info) => setDragX(info.offset.x)}
+        onDragEnd={handleDragEnd}
+        className="glass-panel rounded-2xl p-4 mb-4 relative overflow-hidden group touch-none"
       >
-        <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <div 
-            className="w-10 h-10 rounded-xl flex items-center justify-center text-xl overflow-hidden"
-            style={{ 
-              backgroundColor: `${habit.color || '#00ffcc'}20`,
-              boxShadow: `0 0 15px ${habit.color || '#00ffcc'}30`
-            }}
-          >
-            {habit.icon.startsWith('data:') ? (
-              <img src={habit.icon} alt={habit.name} className="w-full h-full object-cover" />
-            ) : IconComponent ? (
-              <IconComponent className="w-5 h-5" style={{ color: habit.color || 'var(--color-aura-glow)' }} />
-            ) : (
-              <span>{habit.icon}</span>
-            )}
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="font-semibold text-lg leading-tight">{habit.name}</h3>
-              {habit.isStrict && (
-                <div className="px-1.5 py-0.5 rounded-md bg-red-500/20 border border-red-500/30 text-[6px] text-red-500 uppercase font-black tracking-widest">
-                  Strict
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider opacity-50 font-mono">
-              <span style={{ color: habit.color }}>Streak: {streak}d</span>
-              <span>•</span>
-              <span>Intensity: {habit.intensity}%</span>
-            </div>
-          </div>
+        {/* Swipe Indicators */}
+        <div className={cn(
+          "absolute inset-y-0 left-0 w-20 flex items-center justify-center transition-opacity pointer-events-none",
+          dragX > 20 ? "opacity-100" : "opacity-0"
+        )}>
+          <Check className="w-8 h-8 animate-pulse" style={{ color: habit.color || 'var(--color-aura-glow)' }} />
         </div>
-        <button 
-          onClick={toggleExpand}
-          className="p-2 hover:bg-white/5 rounded-full transition-colors"
-        >
-          <ChevronRight className={cn("w-5 h-5 transition-transform", isExpanded && "rotate-90")} />
-        </button>
-      </div>
+        <div className={cn(
+          "absolute inset-y-0 right-0 w-20 flex items-center justify-center transition-opacity pointer-events-none",
+          dragX < -20 ? "opacity-100" : "opacity-0"
+        )}>
+          <X className="w-8 h-8 text-amber-500 animate-pulse" />
+        </div>
 
-      <div className="flex gap-2 mb-4">
-        <button 
-          onClick={() => onLog(habit.id!, 'completed')}
-          className={cn(
-            "flex-1 py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2",
-            todayLog?.status === 'completed' 
-              ? "text-black" 
-              : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
-          )}
-          style={todayLog?.status === 'completed' ? { 
-            backgroundColor: habit.color || 'var(--color-aura-glow)',
-            boxShadow: `0 0 20px ${habit.color || '#00ffcc'}60`
-          } : {}}
+        <motion.div 
+          style={{ x: dragX }}
+          className="relative z-10"
         >
-          {todayLog?.status === 'completed' ? <Check className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
-          {todayLog?.status === 'completed' ? 'Synchronized' : 'Complete'}
-        </button>
-        <button 
-          onClick={() => onLog(habit.id!, 'skipped')}
-          className={cn(
-            "px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all",
-            todayLog?.status === 'skipped'
-              ? "bg-amber-500/20 text-amber-500 border border-amber-500/50"
-              : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
-          )}
-        >
-          Skip
-        </button>
-      </div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div 
+                onPointerDown={(e) => dragControls.start(e)}
+                className="p-1 -ml-2 opacity-0 group-hover:opacity-40 cursor-grab active:cursor-grabbing transition-opacity"
+              >
+                <GripVertical className="w-4 h-4" />
+              </div>
+              <div 
+                className="w-10 h-10 rounded-xl flex items-center justify-center text-xl overflow-hidden"
+                style={{ 
+                  backgroundColor: `${habit.color || '#00ffcc'}20`,
+                  boxShadow: `0 0 15px ${habit.color || '#00ffcc'}30`
+                }}
+              >
+                {habit.icon.startsWith('data:') ? (
+                  <img src={habit.icon} alt={habit.name} className="w-full h-full object-cover" />
+                ) : IconComponent ? (
+                  <IconComponent className="w-5 h-5" style={{ color: habit.color || 'var(--color-aura-glow)' }} />
+                ) : (
+                  <span>{habit.icon}</span>
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-lg leading-tight">{habit.name}</h3>
+                  {habit.isStrict && (
+                    <div className="px-1.5 py-0.5 rounded-md bg-red-500/20 border border-red-500/30 text-[6px] text-red-500 uppercase font-black tracking-widest">
+                      Strict
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider opacity-50 font-mono">
+                  <span style={{ color: habit.color }}>Streak: {streak}d</span>
+                  <span>•</span>
+                  <span>Intensity: {habit.intensity}%</span>
+                </div>
+              </div>
+            </div>
+            <button 
+              onClick={toggleExpand}
+              className="p-2 hover:bg-white/5 rounded-full transition-colors"
+            >
+              <ChevronRight className={cn("w-5 h-5 transition-transform", isExpanded && "rotate-90")} />
+            </button>
+          </div>
 
-      {/* Progress Bar */}
-      <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden flex gap-0.5">
-        {Array.from({ length: 7 }).map((_, i) => {
-          const date = subDays(startOfToday(), 6 - i);
-          const dateStr = format(date, 'yyyy-MM-dd');
-          const log = logs?.find(l => l.date === dateStr);
-          return (
-            <div 
-              key={i}
+          <div className="flex gap-2 mb-4">
+            <button 
+              onClick={() => {
+                triggerHaptic('completed', settings);
+                onLog(habit.id!, 'completed');
+              }}
               className={cn(
-                "flex-1 h-full transition-all duration-500",
-                log?.status === 'completed' ? "" : 
-                log?.status === 'skipped' ? "bg-amber-500/50" : "bg-white/10"
+                "flex-1 py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                todayLog?.status === 'completed' 
+                  ? "text-black" 
+                  : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
               )}
-              style={log?.status === 'completed' ? { 
+              style={todayLog?.status === 'completed' ? { 
                 backgroundColor: habit.color || 'var(--color-aura-glow)',
-                boxShadow: `0 0 8px ${habit.color || '#00ffcc'}80`
+                boxShadow: `0 0 20px ${habit.color || '#00ffcc'}60`
               } : {}}
-            />
-          );
-        })}
-      </div>
+            >
+              {todayLog?.status === 'completed' ? <Check className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
+              {todayLog?.status === 'completed' ? 'Synchronized' : 'Complete'}
+            </button>
+            <button 
+              onClick={() => {
+                triggerHaptic('skipped', settings);
+                onLog(habit.id!, 'skipped');
+              }}
+              className={cn(
+                "px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all",
+                todayLog?.status === 'skipped'
+                  ? "bg-amber-500/20 text-amber-500 border border-amber-500/50"
+                  : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
+              )}
+            >
+              Skip
+            </button>
+          </div>
 
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div 
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden"
-          >
-            <div className="pt-4 space-y-4">
-              {todayLog && (
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[8px] uppercase tracking-[0.2em] font-bold opacity-40">Neural Journal</label>
-                    <button onClick={handleSaveNote} className={cn(
-                      "text-[8px] uppercase font-bold flex items-center gap-1 transition-colors",
-                      isSaved ? "text-green-400" : "text-aura-glow"
-                    )}>
-                      {isSaved ? <Check className="w-3 h-3" /> : <Save className="w-3 h-3" />}
-                      {isSaved ? 'Saved' : 'Save Note'}
+          {/* Progress Bar */}
+          <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden flex gap-0.5">
+            {Array.from({ length: 7 }).map((_, i) => {
+              const date = subDays(startOfToday(), 6 - i);
+              const dateStr = format(date, 'yyyy-MM-dd');
+              const log = logs?.find(l => l.date === dateStr);
+              return (
+                <div 
+                  key={i}
+                  className={cn(
+                    "flex-1 h-full transition-all duration-500",
+                    log?.status === 'completed' ? "" : 
+                    log?.status === 'skipped' ? "bg-amber-500/50" : "bg-white/10"
+                  )}
+                  style={log?.status === 'completed' ? { 
+                    backgroundColor: habit.color || 'var(--color-aura-glow)',
+                    boxShadow: `0 0 8px ${habit.color || '#00ffcc'}80`
+                  } : {}}
+                />
+              );
+            })}
+          </div>
+
+          <AnimatePresence>
+            {isExpanded && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="pt-4 space-y-4">
+                  {todayLog && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[8px] uppercase tracking-[0.2em] font-bold opacity-40">Neural Journal</label>
+                        <button onClick={handleSaveNote} className={cn(
+                          "text-[8px] uppercase font-bold flex items-center gap-1 transition-colors",
+                          isSaved ? "text-green-400" : "text-aura-glow"
+                        )}>
+                          {isSaved ? <Check className="w-3 h-3" /> : <Save className="w-3 h-3" />}
+                          {isSaved ? 'Saved' : 'Save Note'}
+                        </button>
+                      </div>
+                      <textarea 
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        onFocus={() => onKeyboardActive?.(true)}
+                        onBlur={() => onKeyboardActive?.(false)}
+                        placeholder="Log your neural state..."
+                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs outline-none focus:border-aura-glow/30 min-h-[60px] resize-none"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between border-t border-white/5 pt-4">
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => onEdit(habit)}
+                        className="p-2 bg-white/5 hover:bg-white/10 rounded-lg text-white/60 transition-colors"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => onDelete(habit.id!)}
+                        className="p-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg text-red-500/60 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <button 
+                      onClick={() => setShowCalendar(!showCalendar)}
+                      className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold text-aura-glow/60 hover:text-aura-glow"
+                    >
+                      <Calendar className="w-4 h-4" />
+                      Retro Log
                     </button>
                   </div>
-                  <textarea 
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    onFocus={() => onKeyboardActive?.(true)}
-                    onBlur={() => onKeyboardActive?.(false)}
-                    placeholder="Log your neural state..."
-                    className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs outline-none focus:border-aura-glow/30 min-h-[60px] resize-none"
-                  />
-                </div>
-              )}
 
-              <div className="flex items-center justify-between border-t border-white/5 pt-4">
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => onEdit(habit)}
-                    className="p-2 bg-white/5 hover:bg-white/10 rounded-lg text-white/60 transition-colors"
-                  >
-                    <Edit3 className="w-4 h-4" />
-                  </button>
-                  <button 
-                    onClick={() => onDelete(habit.id!)}
-                    className="p-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg text-red-500/60 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {showCalendar && (
+                    <div className="mt-4 p-2 bg-black/40 rounded-xl border border-white/5 grid grid-cols-7 gap-1">
+                      {Array.from({ length: 7 }).map((_, i) => {
+                        const date = subDays(startOfToday(), 6 - i);
+                        const dateStr = format(date, 'yyyy-MM-dd');
+                        const log = logs?.find(l => l.date === dateStr);
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => {
+                              triggerHaptic('completed', settings);
+                              onLog(habit.id!, 'completed', date);
+                            }}
+                            className={cn(
+                              "aspect-square rounded-md flex flex-col items-center justify-center text-[8px] transition-all",
+                              log?.status === 'completed' ? "bg-aura-glow text-black" : "bg-white/5 text-white/40 hover:bg-white/10"
+                            )}
+                          >
+                            <span className="font-bold">{format(date, 'd')}</span>
+                            <span>{format(date, 'MMM')}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-                <button 
-                  onClick={() => setShowCalendar(!showCalendar)}
-                  className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold text-aura-glow/60 hover:text-aura-glow"
-                >
-                  <Calendar className="w-4 h-4" />
-                  Retro Log
-                </button>
-              </div>
-
-              {showCalendar && (
-                <div className="mt-4 p-2 bg-black/40 rounded-xl border border-white/5 grid grid-cols-7 gap-1">
-                  {Array.from({ length: 7 }).map((_, i) => {
-                    const date = subDays(startOfToday(), 6 - i);
-                    const dateStr = format(date, 'yyyy-MM-dd');
-                    const log = logs?.find(l => l.date === dateStr);
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => onLog(habit.id!, 'completed', date)}
-                        className={cn(
-                          "aspect-square rounded-md flex flex-col items-center justify-center text-[8px] transition-all",
-                          log?.status === 'completed' ? "bg-aura-glow text-black" : "bg-white/5 text-white/40 hover:bg-white/10"
-                        )}
-                      >
-                        <span className="font-bold">{format(date, 'd')}</span>
-                        <span>{format(date, 'MMM')}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
-  </motion.div>
-);
-};
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      </motion.div>
+    </Reorder.Item>
+  );
+});
 
 const HUDModal = ({ 
   isOpen, 
@@ -1001,18 +1090,21 @@ const HUDModal = ({
 
 // --- Main Views ---
 
-const ProtocolsView = ({ 
+const ProtocolsView = memo(({ 
+  habits,
   onEdit, 
   onExpandChange, 
   onKeyboardActive,
-  onCelebration
+  onCelebration,
+  onReorder
 }: { 
+  habits: Habit[] | undefined,
   onEdit: (habit: Habit) => void, 
   onExpandChange: (id: number, expanded: boolean) => void, 
   onKeyboardActive: (active: boolean) => void,
-  onCelebration: (habit: Habit) => void
+  onCelebration: (habit: Habit) => void,
+  onReorder: (habits: Habit[]) => void
 }) => {
-  const habits = useLiveQuery(() => db.habits.toArray());
   const settings = useLiveQuery(() => db.settings.toCollection().first());
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
@@ -1025,15 +1117,15 @@ const ProtocolsView = ({
         await db.logs.delete(existing.id!);
       } else {
         await db.logs.update(existing.id!, { status });
+        playSyncSound(settings?.soundPreset, settings?.frequencyLevel, status);
         if (status === 'completed') {
-          playSyncSound(settings?.soundPreset, settings?.frequencyLevel);
           checkMilestone(habitId);
         }
       }
     } else {
       await db.logs.add({ habitId, status, date: dateStr });
+      playSyncSound(settings?.soundPreset, settings?.frequencyLevel, status);
       if (status === 'completed') {
-        playSyncSound(settings?.soundPreset, settings?.frequencyLevel);
         checkMilestone(habitId);
       }
     }
@@ -1065,19 +1157,27 @@ const ProtocolsView = ({
         <p className="text-[10px] font-mono uppercase tracking-widest opacity-40">System Status: Operational</p>
       </div>
 
-      <AnimatePresence mode="popLayout">
-        {habits?.map((habit, idx) => (
-          <HabitCard 
-            key={habit.id ?? idx} 
-            habit={habit} 
-            onLog={handleLog}
-            onEdit={onEdit}
-            onDelete={async (id) => setDeleteId(id)}
-            onExpandChange={(expanded) => onExpandChange(habit.id!, expanded)}
-            onKeyboardActive={onKeyboardActive}
-          />
-        ))}
-      </AnimatePresence>
+      <Reorder.Group 
+        axis="y" 
+        values={habits || []} 
+        onReorder={onReorder}
+        className="space-y-0"
+      >
+        <AnimatePresence mode="popLayout">
+          {habits?.map((habit, idx) => (
+            <HabitCard 
+              key={habit.id ?? idx} 
+              habit={habit} 
+              onLog={handleLog}
+              onEdit={onEdit}
+              onDelete={async (id) => setDeleteId(id)}
+              onExpandChange={(expanded) => onExpandChange(habit.id!, expanded)}
+              onKeyboardActive={onKeyboardActive}
+              settings={settings}
+            />
+          ))}
+        </AnimatePresence>
+      </Reorder.Group>
 
       {habits?.length === 0 && (
         <div className="py-20 text-center opacity-30">
@@ -1095,7 +1195,7 @@ const ProtocolsView = ({
       />
     </div>
   );
-};
+});
 
 const EvolutionView = () => {
   const habits = useLiveQuery(() => db.habits.toArray());
@@ -1111,16 +1211,38 @@ const EvolutionView = () => {
   const totalCompleted = useMemo(() => logs?.filter(l => l.status === 'completed').length || 0, [logs]);
   const totalSkipped = useMemo(() => logs?.filter(l => l.status === 'skipped').length || 0, [logs]);
 
-  const weeklyStats = useMemo(() => {
-    if (!logs) return [];
-    const days = eachDayOfInterval({ start: subDays(startOfToday(), 6), end: startOfToday() });
+  const longestStreakGlobal = useMemo(() => {
+    if (!habits || !logs) return 0;
+    return Math.max(...habits.map(h => calculateLongestStreak(h, logs.filter(l => l.habitId === h.id))), 0);
+  }, [habits, logs]);
+
+  const trendData = useMemo(() => {
+    if (!logs || !habits?.length) return [];
+    const days = eachDayOfInterval({ start: subDays(startOfToday(), 13), end: startOfToday() });
     return days.map(d => {
       const dateStr = format(d, 'yyyy-MM-dd');
       const completed = logs.filter(l => l.date === dateStr && l.status === 'completed').length;
-      const skipped = logs.filter(l => l.date === dateStr && l.status === 'skipped').length;
-      return { date: dateStr, completed, skipped };
+      return {
+        name: format(d, 'MMM dd'),
+        rate: Math.round((completed / habits.length) * 100)
+      };
     });
-  }, [logs]);
+  }, [logs, habits]);
+
+  const comparisonData = useMemo(() => {
+    if (!habits || !logs) return [];
+    return habits.map(h => {
+      const habitLogs = logs.filter(l => l.habitId === h.id);
+      const completed = habitLogs.filter(l => l.status === 'completed').length;
+      const total = habitLogs.length || 1;
+      return {
+        name: h.name.length > 10 ? h.name.substring(0, 8) + '...' : h.name,
+        fullName: h.name,
+        rate: Math.round((completed / total) * 100),
+        streak: calculateStreak(h, habitLogs)
+      };
+    }).sort((a, b) => b.rate - a.rate);
+  }, [habits, logs]);
 
   const heatmapData = useMemo(() => {
     if (!logs) return [];
@@ -1140,105 +1262,65 @@ const EvolutionView = () => {
         <p className="text-[10px] font-mono uppercase tracking-widest opacity-40">Neural Sync Analytics</p>
       </div>
 
-      <div className="glass-panel rounded-[2.5rem] p-8 mb-6 flex flex-col items-center justify-center text-center relative overflow-hidden">
-        <div className="absolute inset-0 bg-aura-glow/5 animate-pulse" />
-        
-        <div className="relative w-48 h-48 mb-6">
-          <svg className="w-full h-full -rotate-90">
-            <circle 
-              cx="96" cy="96" r="80" 
-              className="stroke-white/5 fill-none" 
-              strokeWidth="8" 
-            />
-            <motion.circle 
-              cx="96" cy="96" r="80" 
-              className="stroke-aura-glow fill-none" 
-              strokeWidth="8"
-              strokeDasharray="502.6"
-              initial={{ strokeDashoffset: 502.6 }}
-              animate={{ strokeDashoffset: 502.6 - (502.6 * auraSync) / 100 }}
-              transition={{ duration: 1.5, ease: "easeOut" }}
-              strokeLinecap="round"
-              style={{ filter: 'drop-shadow(0 0 8px var(--color-aura-glow))' }}
-            />
-          </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-4xl font-black tracking-tighter">{auraSync}%</span>
-            <span className="text-[8px] uppercase tracking-[0.2em] font-bold opacity-40">Daily Aura Sync</span>
+      {/* Primary Stats Grid */}
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <div className="glass-panel rounded-3xl p-6 flex flex-col items-center justify-center text-center relative overflow-hidden">
+          <div className="absolute inset-0 bg-aura-glow/5 animate-pulse" />
+          <div className="relative z-10">
+            <div className="text-4xl font-black tracking-tighter text-aura-glow mb-1">{auraSync}%</div>
+            <div className="text-[8px] uppercase tracking-[0.2em] font-bold opacity-40">Daily Sync</div>
           </div>
         </div>
-
-        <div className="grid grid-cols-3 gap-3 w-full">
-          <div className="bg-white/5 rounded-2xl p-3">
-            <div className="text-xl font-bold">{habits?.length || 0}</div>
-            <div className="text-[7px] uppercase tracking-widest opacity-40">Nodes</div>
-          </div>
-          <div className="bg-white/5 rounded-2xl p-3">
-            <div className="text-xl font-bold text-aura-glow">{totalCompleted}</div>
-            <div className="text-[7px] uppercase tracking-widest opacity-40">Syncs</div>
-          </div>
-          <div className="bg-white/5 rounded-2xl p-3">
-            <div className="text-xl font-bold text-amber-500">{totalSkipped}</div>
-            <div className="text-[7px] uppercase tracking-widest opacity-40">Skips</div>
-          </div>
+        <div className="glass-panel rounded-3xl p-6 flex flex-col items-center justify-center text-center">
+          <div className="text-4xl font-black tracking-tighter text-white mb-1">{longestStreakGlobal}</div>
+          <div className="text-[8px] uppercase tracking-[0.2em] font-bold opacity-40">Max Streak</div>
         </div>
       </div>
 
+      {/* Trend Chart */}
       <div className="glass-panel rounded-3xl p-6 mb-6">
-        <h3 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-40 mb-6">Weekly Pulse</h3>
-        <div className="flex items-end justify-between h-32 gap-2">
-          {weeklyStats.map((s, i) => {
-            const max = Math.max(...weeklyStats.map(x => x.completed + x.skipped), 1);
-            const completedHeight = (s.completed / max) * 100;
-            const skippedHeight = (s.skipped / max) * 100;
-            return (
-              <div key={i} className="flex-1 flex flex-col items-center gap-2">
-                <div className="w-full flex flex-col-reverse h-full bg-white/5 rounded-t-sm overflow-hidden">
-                  <motion.div 
-                    initial={{ height: 0 }}
-                    animate={{ height: `${completedHeight}%` }}
-                    className="w-full bg-aura-glow/40 border-t border-aura-glow"
-                  />
-                  <motion.div 
-                    initial={{ height: 0 }}
-                    animate={{ height: `${skippedHeight}%` }}
-                    className="w-full bg-amber-500/20 border-t border-amber-500/40"
-                  />
-                </div>
-                <span className="text-[8px] font-mono opacity-30 uppercase">{format(parseISO(s.date), 'EEE')}</span>
-              </div>
-            );
-          })}
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-40">Neural Trend (14D)</h3>
+          <Activity className="w-3 h-3 text-aura-glow opacity-50" />
         </div>
-      </div>
-
-      <div className="glass-panel rounded-3xl p-6">
-        <h3 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-40 mb-4">Neural Heatmap</h3>
-        <div className="grid grid-cols-7 gap-1">
-          {heatmapData.map((d, i) => {
-            const total = d.completed + d.skipped;
-            return (
-              <div 
-                key={i}
-                className="aspect-square rounded-sm transition-all"
-                style={{ 
-                  backgroundColor: d.completed > 0 
-                    ? `rgba(var(--primary-glow-rgb), ${Math.min(d.completed * 0.25, 1)})` 
-                    : d.skipped > 0 
-                      ? 'rgba(245, 158, 11, 0.2)' 
-                      : 'rgba(255,255,255,0.05)',
-                  boxShadow: d.completed > 0 
-                    ? `0 0 10px rgba(var(--primary-glow-rgb), ${d.completed * 0.1})` 
-                    : 'none'
-                }}
-                title={`${d.date}: ${d.completed} completed, ${d.skipped} skipped`}
+        <div className="h-48 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={trendData}>
+              <defs>
+                <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="var(--color-aura-glow)" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="var(--color-aura-glow)" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+              <XAxis 
+                dataKey="name" 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fontSize: 8, fill: 'rgba(255,255,255,0.3)', fontWeight: 'bold' }}
+                interval="preserveStartEnd"
               />
-            );
-          })}
-        </div>
-        <div className="flex justify-between mt-2 text-[8px] font-mono opacity-30 uppercase">
-          <span>35 Days Ago</span>
-          <span>Today</span>
+              <YAxis hide domain={[0, 100]} />
+              <Tooltip 
+                contentStyle={{ 
+                  backgroundColor: 'rgba(5,5,5,0.9)', 
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '12px',
+                  fontSize: '10px',
+                  fontFamily: 'monospace'
+                }}
+                itemStyle={{ color: 'var(--color-aura-glow)' }}
+              />
+              <Area 
+                type="monotone" 
+                dataKey="rate" 
+                stroke="var(--color-aura-glow)" 
+                fillOpacity={1} 
+                fill="url(#colorRate)" 
+                strokeWidth={2}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
       </div>
     </div>
@@ -1258,6 +1340,7 @@ const SystemView = ({ onBack }: { onBack: () => void }) => {
   const updateSound = async (preset: string) => {
     if (settings?.id) {
       await db.settings.update(settings.id, { soundPreset: preset });
+      playSyncSound(preset, settings.frequencyLevel);
     }
   };
 
@@ -1271,6 +1354,23 @@ const SystemView = ({ onBack }: { onBack: () => void }) => {
   const updateGlass = async (preset: string) => {
     if (settings?.id) {
       await db.settings.update(settings.id, { glassPreset: preset as any });
+    }
+  };
+
+  const toggleHaptic = async () => {
+    if (settings?.id) {
+      await db.settings.update(settings.id, { hapticEnabled: !settings.hapticEnabled });
+    }
+  };
+
+  const toggleNotifications = async () => {
+    if (settings?.id) {
+      const newState = !settings.notificationsEnabled;
+      if (newState && Notification.permission !== 'granted') {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') return;
+      }
+      await db.settings.update(settings.id, { notificationsEnabled: newState });
     }
   };
 
@@ -1360,6 +1460,46 @@ const SystemView = ({ onBack }: { onBack: () => void }) => {
           <p className="text-[7px] uppercase tracking-widest opacity-30 leading-relaxed">
             Enables high-frequency audio feedback and haptic synchronization.
           </p>
+        </div>
+
+        <div className="glass-panel rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-4 h-4 text-aura-glow" />
+              <h3 className="text-[10px] uppercase tracking-widest font-bold">Haptic Feedback</h3>
+            </div>
+            <button 
+              onClick={toggleHaptic}
+              className={cn(
+                "w-10 h-5 rounded-full transition-all relative",
+                settings?.hapticEnabled ? "bg-aura-glow" : "bg-white/10"
+              )}
+            >
+              <div className={cn(
+                "absolute top-0.5 w-4 h-4 rounded-full bg-black transition-all",
+                settings?.hapticEnabled ? "left-5.5" : "left-0.5"
+              )} />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Bell className="w-4 h-4 text-aura-glow" />
+              <h3 className="text-[10px] uppercase tracking-widest font-bold">Neural Notifications</h3>
+            </div>
+            <button 
+              onClick={toggleNotifications}
+              className={cn(
+                "w-10 h-5 rounded-full transition-all relative",
+                settings?.notificationsEnabled ? "bg-aura-glow" : "bg-white/10"
+              )}
+            >
+              <div className={cn(
+                "absolute top-0.5 w-4 h-4 rounded-full bg-black transition-all",
+                settings?.notificationsEnabled ? "left-5.5" : "left-0.5"
+              )} />
+            </button>
+          </div>
         </div>
 
         <div className="glass-panel rounded-2xl p-4">
@@ -1456,7 +1596,7 @@ const SystemView = ({ onBack }: { onBack: () => void }) => {
             <h3 className="text-[10px] uppercase tracking-widest font-bold">Glassmorphism Preset</h3>
           </div>
           <div className="grid grid-cols-3 gap-2">
-            {['Aura', 'Frosted', 'Crystal', 'Obsidian', 'Cyber'].map(p => (
+            {['Aura', 'Frosted', 'Crystal', 'Obsidian', 'Cyber', 'Light', 'Nebula', 'Prism', 'Void'].map(p => (
               <button 
                 key={p}
                 onClick={() => updateGlass(p)}
@@ -1531,15 +1671,41 @@ export default function App() {
   }, [activeTab]);
   
   const settings = useLiveQuery(() => db.settings.toCollection().first());
-  const habits = useLiveQuery(() => db.habits.toArray());
+  const habits = useLiveQuery(() => db.habits.orderBy('order').toArray());
   const logs = useLiveQuery(() => db.logs.toArray());
 
-  const isSyncActive = useMemo(() => {
-    if (!habits?.length || !logs) return false;
-    const today = format(new Date(), 'yyyy-MM-dd');
-    const logsToday = logs.filter(l => l.date === today);
-    return logsToday.length > 0;
-  }, [habits, logs]);
+  useEffect(() => {
+    if (!settings?.notificationsEnabled) return;
+
+    const checkNotifications = () => {
+      const lastNoti = localStorage.getItem('aura_last_noti');
+      const now = Date.now();
+      const oneHour = 60 * 60 * 1000;
+
+      if (!lastNoti || now - parseInt(lastNoti) >= oneHour) {
+        if (Notification.permission === 'granted') {
+          new Notification('Aura Streak Alert', {
+            body: 'Time to sync your neural protocols. Maintain your streak.',
+            icon: '/favicon.ico'
+          });
+          localStorage.setItem('aura_last_noti', now.toString());
+        }
+      }
+    };
+
+    const interval = setInterval(checkNotifications, 60000); // Check every minute
+    return () => clearInterval(interval);
+  }, [settings?.notificationsEnabled]);
+
+  const handleReorder = async (newHabits: Habit[]) => {
+    // Update local state is handled by Reorder.Group values prop
+    // We need to update the database with new order values
+    for (let i = 0; i < newHabits.length; i++) {
+      if (newHabits[i].id) {
+        await db.habits.update(newHabits[i].id!, { order: i });
+      }
+    }
+  };
 
   useEffect(() => {
     if (settings?.primaryGlow) {
@@ -1553,50 +1719,26 @@ export default function App() {
     if (settings?.glassPreset) {
       const presets = {
         Aura: { bg: 'rgba(255, 255, 255, 0.05)', blur: '24px', border: 'rgba(255, 255, 255, 0.1)' },
-        Frosted: { bg: 'rgba(255, 255, 255, 0.1)', blur: '10px', border: 'rgba(255, 255, 255, 0.2)' },
-        Crystal: { bg: 'rgba(255, 255, 255, 0.02)', blur: '40px', border: 'rgba(255, 255, 255, 0.05)' },
-        Obsidian: { bg: 'rgba(0, 0, 0, 0.6)', blur: '20px', border: 'rgba(255, 255, 255, 0.05)' },
-        Cyber: { bg: 'rgba(var(--primary-glow-rgb), 0.03)', blur: '15px', border: 'rgba(var(--primary-glow-rgb), 0.2)' }
+        Frosted: { bg: 'rgba(255, 255, 255, 0.15)', blur: '12px', border: 'rgba(255, 255, 255, 0.2)' },
+        Crystal: { bg: 'rgba(255, 255, 255, 0.02)', blur: '40px', border: 'rgba(255, 255, 255, 0.3)' },
+        Obsidian: { bg: 'rgba(0, 0, 0, 0.6)', blur: '32px', border: 'rgba(255, 255, 255, 0.05)' },
+        Cyber: { bg: 'rgba(0, 255, 204, 0.03)', blur: '20px', border: 'rgba(0, 255, 204, 0.2)' },
+        Light: { bg: 'rgba(0, 0, 0, 0.03)', blur: '12px', border: 'rgba(0, 0, 0, 0.08)' },
+        Nebula: { bg: 'rgba(255, 0, 255, 0.03)', blur: '30px', border: 'rgba(255, 255, 255, 0.1)' },
+        Prism: { bg: 'rgba(255, 255, 255, 0.05)', blur: '24px', border: 'rgba(255, 255, 255, 0.2)' },
+        Void: { bg: 'rgba(255, 255, 255, 0.01)', blur: '60px', border: 'rgba(255, 255, 255, 0.03)' }
       };
-      const p = presets[settings.glassPreset] || presets.Aura;
+      const p = presets[settings.glassPreset as keyof typeof presets] || presets.Aura;
       document.documentElement.style.setProperty('--glass-bg', p.bg);
       document.documentElement.style.setProperty('--glass-blur', p.blur);
       document.documentElement.style.setProperty('--glass-border', p.border);
+      
+      // Apply theme class to body
+      document.body.className = `theme-${settings.glassPreset.toLowerCase()}`;
     }
   }, [settings]);
 
   const [showStats, setShowStats] = useState(false);
-  const [isSyncDismissed, setIsSyncDismissed] = useState(false);
-  const dismissTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    if (isSyncActive) {
-      setIsSyncDismissed(false);
-    }
-  }, [isSyncActive]);
-
-  const handleSyncClick = () => {
-    setShowStats(prev => !prev);
-    
-    // Clear any existing timeout
-    if (dismissTimeoutRef.current) {
-      clearTimeout(dismissTimeoutRef.current);
-    }
-
-    if (isSyncActive) {
-      dismissTimeoutRef.current = setTimeout(() => {
-        setIsSyncDismissed(true);
-        setShowStats(false);
-      }, 3000);
-    }
-  };
-
-  // Cleanup timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (dismissTimeoutRef.current) clearTimeout(dismissTimeoutRef.current);
-    };
-  }, []);
   
   const stats = useMemo(() => {
     if (!habits || !logs) return { total: 0, completed: 0, skipped: 0 };
@@ -1613,9 +1755,11 @@ export default function App() {
     if (editingHabit?.id) {
       await db.habits.update(editingHabit.id, habitData);
     } else {
+      const count = await db.habits.count();
       await db.habits.add({
         ...habitData as Habit,
-        createdAt: new Date()
+        createdAt: new Date(),
+        order: count
       });
     }
     setIsModalOpen(false);
@@ -1627,16 +1771,22 @@ export default function App() {
   }, [quoteIndex]);
 
   useEffect(() => {
-    const handlePopState = (e: PopStateEvent) => {
-      if (activeTab !== 'protocols' || isModalOpen) {
-        e.preventDefault();
-        setActiveTab('protocols');
+    const handlePopState = () => {
+      if (isModalOpen) {
         setIsModalOpen(false);
-        window.history.pushState(null, '', window.location.pathname);
+        window.history.pushState(null, '');
+      } else if (activeTab !== 'protocols') {
+        setActiveTab('protocols');
+        window.history.pushState(null, '');
       }
     };
 
-    window.history.pushState(null, '', window.location.pathname);
+    // Push initial dummy state to intercept first back button
+    if (window.history.state !== 'aura-intercept') {
+      window.history.replaceState('aura-base', '');
+      window.history.pushState('aura-intercept', '');
+    }
+
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, [activeTab, isModalOpen]);
@@ -1663,23 +1813,6 @@ export default function App() {
                 </div>
               </div>
               <div className="flex items-center gap-2 relative">
-                <AnimatePresence>
-                  {isSyncActive && !isSyncDismissed && (
-                    <motion.button 
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 20, filter: 'blur(10px)' }}
-                      onClick={handleSyncClick}
-                      className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 border border-white/10"
-                    >
-                      <div className="w-1.5 h-1.5 rounded-full bg-aura-glow animate-pulse shadow-[0_0_8px_var(--color-aura-glow)]" />
-                      <span className="text-[7px] font-black tracking-[0.2em] uppercase text-aura-glow/80">
-                        [ SYNC ]
-                      </span>
-                    </motion.button>
-                  )}
-                </AnimatePresence>
-
                 <AnimatePresence>
                   {showStats && (
                     <motion.div
@@ -1714,6 +1847,13 @@ export default function App() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+
+                <button 
+                  onClick={() => setShowStats(!showStats)}
+                  className="p-2.5 bg-white/5 rounded-xl hover:bg-white/10 transition-colors"
+                >
+                  <BarChart3 className="w-4 h-4 text-white/60" />
+                </button>
               </div>
             </div>
             
@@ -1751,10 +1891,12 @@ export default function App() {
               transition={{ duration: 0.2 }}
             >
               <ProtocolsView 
+                habits={habits}
                 onEdit={(h) => { setEditingHabit(h); setIsModalOpen(true); }} 
                 onExpandChange={handleExpandChange} 
                 onKeyboardActive={setIsKeyboardActive}
                 onCelebration={(h) => setCelebrationHabit(h)}
+                onReorder={handleReorder}
               />
             </motion.div>
           )}

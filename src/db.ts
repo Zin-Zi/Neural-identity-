@@ -9,6 +9,7 @@ export interface Habit {
   goalDays: number;
   isStrict: boolean;
   createdAt: Date;
+  order: number;
 }
 
 export interface HabitLog {
@@ -26,7 +27,9 @@ export interface Settings {
   userName: string;
   neuralSyncEnabled: boolean;
   frequencyLevel: number;
-  glassPreset: 'Aura' | 'Frosted' | 'Crystal' | 'Obsidian' | 'Cyber';
+  glassPreset: 'Aura' | 'Frosted' | 'Crystal' | 'Obsidian' | 'Cyber' | 'Light' | 'Nebula' | 'Prism' | 'Void';
+  hapticEnabled: boolean;
+  notificationsEnabled: boolean;
 }
 
 export class AuraDatabase extends Dexie {
@@ -36,8 +39,8 @@ export class AuraDatabase extends Dexie {
 
   constructor() {
     super('AuraDatabase');
-    this.version(4).stores({
-      habits: '++id, name',
+    this.version(6).stores({
+      habits: '++id, name, order',
       logs: '++id, habitId, date, [habitId+date]',
       settings: '++id'
     });
@@ -52,11 +55,13 @@ db.on('ready', async () => {
   if (count === 0) {
     await db.settings.add({
       primaryGlow: '#00ffcc',
-      soundPreset: 'Cyber Chime',
+      soundPreset: 'Starlink Alpha',
       userName: 'Thant Zin Aung',
       neuralSyncEnabled: true,
       frequencyLevel: 3,
-      glassPreset: 'Aura'
+      glassPreset: 'Aura',
+      hapticEnabled: true,
+      notificationsEnabled: false
     });
   }
 });

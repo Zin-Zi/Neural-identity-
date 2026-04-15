@@ -25,6 +25,13 @@
   100% { filter: drop-shadow(0 0 2px var(--color-aura-glow)); opacity: 0.7; transform: scale(1); }
 }
 
+@keyframes crystal-shine {
+  0% { transform: translateX(-100%) skewX(-15deg); opacity: 0; }
+  20% { opacity: 0.5; }
+  50% { transform: translateX(100%) skewX(-15deg); opacity: 0.5; }
+  100% { transform: translateX(100%) skewX(-15deg); opacity: 0; }
+}
+
 .animate-supernova {
   animation: supernova 3s infinite ease-in-out;
 }
@@ -33,6 +40,53 @@
   background-color: var(--glass-bg, rgba(255, 255, 255, 0.05));
   backdrop-filter: blur(var(--glass-blur, 24px));
   border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.1));
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-panel::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -50%;
+  width: 200%;
+  height: 100%;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(255, 255, 255, 0.05) 40%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.05) 60%,
+    transparent
+  );
+  transform: skewX(-15deg);
+  pointer-events: none;
+  animation: crystal-shine 8s infinite linear;
+}
+
+.theme-light {
+  --color-vantablack: #f8f9fa;
+  --glass-bg: rgba(0, 0, 0, 0.03);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-blur: 12px;
+  color: #1a1a1a;
+}
+
+.theme-nebula {
+  background-image: 
+    radial-gradient(circle at 50% -20%, rgba(255, 0, 255, 0.15), transparent 80%),
+    radial-gradient(circle at 0% 100%, rgba(0, 255, 255, 0.1), transparent 50%);
+}
+
+.theme-prism {
+  --glass-border: linear-gradient(45deg, rgba(255,0,0,0.2), rgba(0,255,0,0.2), rgba(0,0,255,0.2));
+}
+
+.theme-void {
+  --color-vantablack: #000000;
+  --glass-bg: rgba(255, 255, 255, 0.02);
+  --glass-border: rgba(255, 255, 255, 0.05);
+  --glass-blur: 40px;
 }
 
 .hud-modal {
