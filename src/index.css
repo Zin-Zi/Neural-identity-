@@ -30,7 +30,9 @@
 }
 
 .glass-panel {
-  @apply bg-white/5 backdrop-blur-xl border border-white/10;
+  background-color: var(--glass-bg, rgba(255, 255, 255, 0.05));
+  backdrop-filter: blur(var(--glass-blur, 24px));
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.1));
 }
 
 .hud-modal {
