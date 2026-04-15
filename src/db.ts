@@ -4,6 +4,7 @@ export interface Habit {
   id?: number;
   name: string;
   icon: string;
+  color?: string;
   intensity: number;
   goalDays: number;
   isStrict: boolean;
@@ -35,7 +36,7 @@ export class AuraDatabase extends Dexie {
 
   constructor() {
     super('AuraDatabase');
-    this.version(3).stores({
+    this.version(4).stores({
       habits: '++id, name',
       logs: '++id, habitId, date, [habitId+date]',
       settings: '++id'

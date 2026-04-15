@@ -33,16 +33,69 @@ import {
   Save,
   User,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  Trophy,
+  Sparkles,
+  Dumbbell,
+  Flame,
+  Droplets,
+  Utensils,
+  Laptop,
+  Gamepad2,
+  Bike,
+  Timer,
+  Cloud,
+  Star,
+  Smile
 } from 'lucide-react';
 
 const ICON_MAP: Record<string, any> = {
-  Activity, Zap, Brain, Target, Heart, Code, Book, Music, Camera, Coffee, Moon, Sun
+  Activity, Zap, Brain, Target, Heart, Code, Book, Music, Camera, Coffee, Moon, Sun,
+  Dumbbell, Flame, Droplets, Utensils, Laptop, Palette, Gamepad2, Bike, Timer, Cloud, Star, Smile
 };
 import { useLiveQuery } from 'dexie-react-hooks';
 import { format, startOfToday, subDays, eachDayOfInterval, isSameDay, parseISO, isBefore, startOfDay } from 'date-fns';
 import { db, type Habit, type HabitLog } from './db';
 import { cn, hexToRgb } from './lib/utils';
+
+// --- Streak Utility ---
+const calculateStreak = (habit: Habit, logs: HabitLog[]) => {
+  let count = 0;
+  let current = startOfToday();
+  const todayStr = format(current, 'yyyy-MM-dd');
+  const todayLogEntry = logs.find(l => l.date === todayStr);
+  
+  // If today is not completed, we start checking from yesterday
+  if (todayLogEntry?.status !== 'completed') {
+    // If strict mode and today is skipped, streak is already broken
+    if (habit.isStrict && todayLogEntry?.status === 'skipped') return 0;
+    current = subDays(current, 1);
+  }
+
+  while (true) {
+    const dateStr = format(current, 'yyyy-MM-dd');
+    const log = logs.find(l => l.date === dateStr);
+    
+    if (log?.status === 'completed') {
+      count++;
+      current = subDays(current, 1);
+    } else if (log?.status === 'skipped') {
+      if (habit.isStrict) {
+        break; // Strict mode: skip breaks streak
+      } else {
+        current = subDays(current, 1); // Normal mode: skip preserves streak but doesn't increment
+      }
+    } else {
+      // No log found for this day
+      // Check if it's before the habit was created
+      if (isBefore(current, startOfDay(habit.createdAt))) break;
+      
+      // If it's a missing day, streak breaks regardless of mode
+      break;
+    }
+  }
+  return count;
+};
 
 // --- Sound Utility ---
 const FREQUENCY_MAP: Record<number, number> = {
@@ -105,7 +158,126 @@ const playSyncSound = (preset: string = 'Cyber Chime', level: number = 3) => {
   }
 };
 
+const playCelebrationSound = () => {
+  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  const playNote = (freq: number, startTime: number, duration: number) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, startTime);
+    gain.gain.setValueAtTime(0.1, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+    osc.start(startTime);
+    osc.stop(startTime + duration);
+  };
+
+  const now = audioCtx.currentTime;
+  // Arpeggio
+  playNote(523.25, now, 0.5); // C5
+  playNote(659.25, now + 0.1, 0.5); // E5
+  playNote(783.99, now + 0.2, 0.5); // G5
+  playNote(1046.50, now + 0.3, 1.0); // C6
+};
+
 // --- Components ---
+
+const CelebrationOverlay = ({ 
+  habitName, 
+  onComplete 
+}: { 
+  habitName: string; 
+  onComplete: () => void 
+}) => {
+  useEffect(() => {
+    playCelebrationSound();
+    const timer = setTimeout(onComplete, 4000);
+    return () => clearTimeout(timer);
+  }, [onComplete]);
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-vantablack/90 backdrop-blur-xl overflow-hidden"
+    >
+      <motion.div
+        initial={{ scale: 0, rotate: -180 }}
+        animate={{ scale: 1, rotate: 0 }}
+        transition={{ type: "spring", damping: 12, stiffness: 100 }}
+        className="relative mb-8"
+      >
+        <div className="absolute inset-0 bg-aura-glow/20 blur-[100px] rounded-full animate-pulse" />
+        <div className="w-32 h-32 rounded-full bg-aura-glow/10 border-2 border-aura-glow flex items-center justify-center relative">
+          <Trophy className="w-16 h-16 text-aura-glow" />
+          <motion.div
+            animate={{ scale: [1, 1.5, 1], opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="absolute -top-2 -right-2"
+          >
+            <Sparkles className="w-8 h-8 text-aura-glow" />
+          </motion.div>
+        </div>
+      </motion.div>
+
+      <motion.div
+        initial={{ y: 20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.3 }}
+        className="text-center px-8"
+      >
+        <h2 className="text-3xl font-black tracking-tighter uppercase mb-2 bg-gradient-to-b from-white to-white/40 bg-clip-text text-transparent">
+          Goal Horizon Reached
+        </h2>
+        <p className="text-xs font-mono uppercase tracking-[0.3em] text-aura-glow mb-6">
+          Neural Protocol Optimized: {habitName}
+        </p>
+        <div className="flex justify-center gap-1">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <motion.div
+              key={i}
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ delay: 0.5 + i * 0.1 }}
+              className="w-2 h-2 rounded-full bg-aura-glow shadow-[0_0_10px_var(--color-aura-glow)]"
+            />
+          ))}
+        </div>
+      </motion.div>
+
+      {/* Particle Effects */}
+      <div className="absolute inset-0 pointer-events-none">
+        {Array.from({ length: 20 }).map((_, i) => (
+          <motion.div
+            key={i}
+            initial={{ 
+              x: "50%", 
+              y: "50%", 
+              scale: 0,
+              opacity: 1 
+            }}
+            animate={{ 
+              x: `${Math.random() * 100}%`, 
+              y: `${Math.random() * 100}%`,
+              scale: Math.random() * 2,
+              opacity: 0
+            }}
+            transition={{ 
+              duration: 2 + Math.random() * 2,
+              repeat: Infinity,
+              delay: Math.random() * 2
+            }}
+            className="absolute w-1 h-1 bg-aura-glow rounded-full"
+          />
+        ))}
+      </div>
+    </motion.div>
+  );
+};
 
 const ConfirmDialog = ({ 
   isOpen, 
@@ -334,42 +506,8 @@ const HabitCard = ({
 
   const streak = useMemo(() => {
     if (!logs) return 0;
-    let count = 0;
-    let current = startOfToday();
-    const todayStr = format(current, 'yyyy-MM-dd');
-    const todayLogEntry = logs.find(l => l.date === todayStr);
-    
-    // If today is not completed, we start checking from yesterday
-    if (todayLogEntry?.status !== 'completed') {
-      // If strict mode and today is skipped, streak is already broken
-      if (habit.isStrict && todayLogEntry?.status === 'skipped') return 0;
-      current = subDays(current, 1);
-    }
-
-    while (true) {
-      const dateStr = format(current, 'yyyy-MM-dd');
-      const log = logs.find(l => l.date === dateStr);
-      
-      if (log?.status === 'completed') {
-        count++;
-        current = subDays(current, 1);
-      } else if (log?.status === 'skipped') {
-        if (habit.isStrict) {
-          break; // Strict mode: skip breaks streak
-        } else {
-          current = subDays(current, 1); // Normal mode: skip preserves streak but doesn't increment
-        }
-      } else {
-        // No log found for this day
-        // Check if it's before the habit was created
-        if (isBefore(current, startOfDay(habit.createdAt))) break;
-        
-        // If it's a missing day, streak breaks regardless of mode
-        break;
-      }
-    }
-    return count;
-  }, [logs, habit.isStrict, habit.createdAt]);
+    return calculateStreak(habit, logs);
+  }, [logs, habit]);
 
   const IconComponent = ICON_MAP[habit.icon];
 
@@ -415,7 +553,7 @@ const HabitCard = ({
         "absolute inset-y-0 left-0 w-20 flex items-center justify-center transition-opacity pointer-events-none",
         dragX > 20 ? "opacity-100" : "opacity-0"
       )}>
-        <Check className="w-8 h-8 text-aura-glow animate-pulse" />
+        <Check className="w-8 h-8 animate-pulse" style={{ color: habit.color || 'var(--color-aura-glow)' }} />
       </div>
       <div className={cn(
         "absolute inset-y-0 right-0 w-20 flex items-center justify-center transition-opacity pointer-events-none",
@@ -430,9 +568,17 @@ const HabitCard = ({
       >
         <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-aura-glow/10 flex items-center justify-center text-xl shadow-[0_0_15px_rgba(var(--primary-glow-rgb),0.2)]">
-            {IconComponent ? (
-              <IconComponent className="w-5 h-5 text-aura-glow" />
+          <div 
+            className="w-10 h-10 rounded-xl flex items-center justify-center text-xl overflow-hidden"
+            style={{ 
+              backgroundColor: `${habit.color || '#00ffcc'}20`,
+              boxShadow: `0 0 15px ${habit.color || '#00ffcc'}30`
+            }}
+          >
+            {habit.icon.startsWith('data:') ? (
+              <img src={habit.icon} alt={habit.name} className="w-full h-full object-cover" />
+            ) : IconComponent ? (
+              <IconComponent className="w-5 h-5" style={{ color: habit.color || 'var(--color-aura-glow)' }} />
             ) : (
               <span>{habit.icon}</span>
             )}
@@ -447,7 +593,7 @@ const HabitCard = ({
               )}
             </div>
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider opacity-50 font-mono">
-              <span>Streak: {streak}d</span>
+              <span style={{ color: habit.color }}>Streak: {streak}d</span>
               <span>•</span>
               <span>Intensity: {habit.intensity}%</span>
             </div>
@@ -467,9 +613,13 @@ const HabitCard = ({
           className={cn(
             "flex-1 py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2",
             todayLog?.status === 'completed' 
-              ? "bg-aura-glow text-black shadow-[0_0_20px_var(--color-aura-glow)]" 
-              : "bg-aura-glow/10 text-aura-glow border border-aura-glow/30 hover:bg-aura-glow/20"
+              ? "text-black" 
+              : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
           )}
+          style={todayLog?.status === 'completed' ? { 
+            backgroundColor: habit.color || 'var(--color-aura-glow)',
+            boxShadow: `0 0 20px ${habit.color || '#00ffcc'}60`
+          } : {}}
         >
           {todayLog?.status === 'completed' ? <Check className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
           {todayLog?.status === 'completed' ? 'Synchronized' : 'Complete'}
@@ -498,9 +648,13 @@ const HabitCard = ({
               key={i}
               className={cn(
                 "flex-1 h-full transition-all duration-500",
-                log?.status === 'completed' ? "bg-aura-glow shadow-[0_0_8px_var(--color-aura-glow)]" : 
+                log?.status === 'completed' ? "" : 
                 log?.status === 'skipped' ? "bg-amber-500/50" : "bg-white/10"
               )}
+              style={log?.status === 'completed' ? { 
+                backgroundColor: habit.color || 'var(--color-aura-glow)',
+                boxShadow: `0 0 8px ${habit.color || '#00ffcc'}80`
+              } : {}}
             />
           );
         })}
@@ -606,21 +760,24 @@ const HUDModal = ({
 }) => {
   const [name, setName] = useState(initialHabit?.name || '');
   const [icon, setIcon] = useState(initialHabit?.icon || '🚀');
+  const [color, setColor] = useState(initialHabit?.color || '#00ffcc');
   const [intensity, setIntensity] = useState(initialHabit?.intensity || 50);
   const [goalDays, setGoalDays] = useState(initialHabit?.goalDays || 30);
   const [isStrict, setIsStrict] = useState(initialHabit?.isStrict || false);
-  const [tab, setTab] = useState<'icons' | 'emojis'>('emojis');
+  const [tab, setTab] = useState<'icons' | 'emojis' | 'custom'>('emojis');
 
   useEffect(() => {
     if (initialHabit) {
       setName(initialHabit.name);
       setIcon(initialHabit.icon);
+      setColor(initialHabit.color || '#00ffcc');
       setIntensity(initialHabit.intensity);
       setGoalDays(initialHabit.goalDays);
       setIsStrict(initialHabit.isStrict || false);
     } else {
       setName('');
       setIcon('🚀');
+      setColor('#00ffcc');
       setIntensity(50);
       setGoalDays(30);
       setIsStrict(false);
@@ -629,8 +786,21 @@ const HUDModal = ({
 
   if (!isOpen) return null;
 
-  const emojis = ['🔥', '💧', '⚡', '🧠', '💪', '🧘', '🥗', '📚', '💻', '🎨', '🎸', '🏃'];
-  const icons = ['Activity', 'Zap', 'Brain', 'Target', 'Heart', 'Code', 'Book', 'Music', 'Camera', 'Coffee', 'Moon', 'Sun'];
+  const emojis = ['🔥', '💧', '⚡', '🧠', '💪', '🧘', '🥗', '📚', '💻', '🎨', '🎸', '🏃', '🧗', '🚴', '🏊', '🛌', '🚿'];
+  const icons = Object.keys(ICON_MAP);
+  const colors = ['#00ffcc', '#ff3366', '#3366ff', '#ffcc00', '#cc00ff', '#d4ff00', '#6600ff', '#ff6600', '#00ff99', '#ff99cc'];
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setIcon(reader.result as string);
+        setTab('custom');
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
@@ -676,39 +846,91 @@ const HUDModal = ({
                 >
                   Icons
                 </button>
+                <button 
+                  onClick={() => setTab('custom')}
+                  className={cn("px-2 py-1 text-[8px] rounded-md font-bold uppercase", tab === 'custom' ? "bg-white/10 text-white" : "text-white/40")}
+                >
+                  Custom
+                </button>
               </div>
             </div>
-            <div className="grid grid-cols-6 gap-2">
-              {tab === 'emojis' ? (
-                emojis.map(i => (
-                  <button 
-                    key={i}
-                    onClick={() => setIcon(i)}
-                    className={cn(
-                      "aspect-square rounded-xl flex items-center justify-center text-xl transition-all",
-                      icon === i ? "bg-aura-glow/20 border border-aura-glow/50 scale-110" : "bg-white/5 border border-transparent hover:bg-white/10"
+
+            {tab === 'custom' ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden">
+                    {icon.startsWith('data:') ? (
+                      <img src={icon} alt="Custom" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-xs opacity-40">?</span>
                     )}
-                  >
-                    {i}
-                  </button>
-                ))
-              ) : (
-                icons.map(i => {
-                  const IconComp = ICON_MAP[i];
-                  return (
+                  </div>
+                  <label className="flex-1 cursor-pointer">
+                    <div className="bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-center text-[10px] font-bold uppercase tracking-widest hover:bg-white/10 transition-colors">
+                      Upload Asset
+                    </div>
+                    <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+                  </label>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-6 gap-2 max-h-32 overflow-y-auto p-1 scrollbar-hide">
+                {tab === 'emojis' ? (
+                  emojis.map(i => (
                     <button 
                       key={i}
                       onClick={() => setIcon(i)}
                       className={cn(
-                        "aspect-square rounded-xl flex items-center justify-center transition-all",
-                        icon === i ? "bg-aura-glow/20 border border-aura-glow/50 scale-110" : "bg-white/5 border border-transparent hover:bg-white/10"
+                        "aspect-square rounded-xl flex items-center justify-center text-xl transition-all",
+                        icon === i ? "bg-white/10 border border-white/20 scale-110" : "bg-white/5 border border-transparent hover:bg-white/10"
                       )}
+                      style={icon === i ? { borderColor: `${color}80`, backgroundColor: `${color}20` } : {}}
                     >
-                      <IconComp className={cn("w-5 h-5", icon === i ? "text-aura-glow" : "text-white/40")} />
+                      {i}
                     </button>
-                  );
-                })
-              )}
+                  ))
+                ) : (
+                  icons.map(i => {
+                    const IconComp = ICON_MAP[i];
+                    return (
+                      <button 
+                        key={i}
+                        onClick={() => setIcon(i)}
+                        className={cn(
+                          "aspect-square rounded-xl flex items-center justify-center transition-all",
+                          icon === i ? "bg-white/10 border border-white/20 scale-110" : "bg-white/5 border border-transparent hover:bg-white/10"
+                        )}
+                        style={icon === i ? { borderColor: `${color}80`, backgroundColor: `${color}20` } : {}}
+                      >
+                        <IconComp className={cn("w-5 h-5", icon === i ? "" : "text-white/40")} style={icon === i ? { color: color } : {}} />
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-40">Aura Color</label>
+            <div className="flex flex-wrap gap-2">
+              {colors.map(c => (
+                <button 
+                  key={c}
+                  onClick={() => setColor(c)}
+                  className={cn(
+                    "w-6 h-6 rounded-full border-2 transition-all",
+                    color === c ? "border-white scale-110" : "border-transparent"
+                  )}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+              <input 
+                type="color" 
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                className="w-6 h-6 bg-transparent border-none cursor-pointer"
+              />
             </div>
           </div>
 
@@ -765,8 +987,9 @@ const HUDModal = ({
           </div>
 
           <button 
-            onClick={() => onSave({ name, icon, intensity, goalDays, isStrict })}
-            className="w-full py-4 bg-aura-glow text-black rounded-2xl font-black uppercase tracking-[0.2em] shadow-[0_0_30px_var(--color-aura-glow)] hover:scale-[1.02] active:scale-[0.98] transition-all"
+            onClick={() => onSave({ name, icon, color, intensity, goalDays, isStrict })}
+            className="w-full py-4 rounded-2xl font-black uppercase tracking-[0.2em] shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all"
+            style={{ backgroundColor: color, color: '#000', boxShadow: `0 0 30px ${color}40` }}
           >
             {initialHabit ? 'Update Protocol' : 'Ignite Protocol'}
           </button>
@@ -778,7 +1001,17 @@ const HUDModal = ({
 
 // --- Main Views ---
 
-const ProtocolsView = ({ onEdit, onExpandChange, onKeyboardActive }: { onEdit: (habit: Habit) => void, onExpandChange: (id: number, expanded: boolean) => void, onKeyboardActive: (active: boolean) => void }) => {
+const ProtocolsView = ({ 
+  onEdit, 
+  onExpandChange, 
+  onKeyboardActive,
+  onCelebration
+}: { 
+  onEdit: (habit: Habit) => void, 
+  onExpandChange: (id: number, expanded: boolean) => void, 
+  onKeyboardActive: (active: boolean) => void,
+  onCelebration: (habit: Habit) => void
+}) => {
   const habits = useLiveQuery(() => db.habits.toArray());
   const settings = useLiveQuery(() => db.settings.toCollection().first());
   const [deleteId, setDeleteId] = useState<number | null>(null);
@@ -794,12 +1027,25 @@ const ProtocolsView = ({ onEdit, onExpandChange, onKeyboardActive }: { onEdit: (
         await db.logs.update(existing.id!, { status });
         if (status === 'completed') {
           playSyncSound(settings?.soundPreset, settings?.frequencyLevel);
+          checkMilestone(habitId);
         }
       }
     } else {
       await db.logs.add({ habitId, status, date: dateStr });
       if (status === 'completed') {
         playSyncSound(settings?.soundPreset, settings?.frequencyLevel);
+        checkMilestone(habitId);
+      }
+    }
+  };
+
+  const checkMilestone = async (habitId: number) => {
+    const habit = await db.habits.get(habitId);
+    const logs = await db.logs.where('habitId').equals(habitId).toArray();
+    if (habit && logs) {
+      const currentStreak = calculateStreak(habit, logs);
+      if (currentStreak === habit.goalDays && habit.goalDays > 0) {
+        onCelebration(habit);
       }
     }
   };
@@ -1256,6 +1502,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'protocols' | 'evolution' | 'system'>('protocols');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
+  const [celebrationHabit, setCelebrationHabit] = useState<Habit | null>(null);
   const [expandedHabits, setExpandedHabits] = useState<Set<number>>(new Set());
 
   const isAnyCardExpanded = expandedHabits.size > 0;
@@ -1507,6 +1754,7 @@ export default function App() {
                 onEdit={(h) => { setEditingHabit(h); setIsModalOpen(true); }} 
                 onExpandChange={handleExpandChange} 
                 onKeyboardActive={setIsKeyboardActive}
+                onCelebration={(h) => setCelebrationHabit(h)}
               />
             </motion.div>
           )}
@@ -1607,6 +1855,15 @@ export default function App() {
           >
             <Plus className="w-8 h-8" />
           </motion.button>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {celebrationHabit && (
+          <CelebrationOverlay 
+            habitName={celebrationHabit.name} 
+            onComplete={() => setCelebrationHabit(null)} 
+          />
         )}
       </AnimatePresence>
 
