@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
-import { motion, AnimatePresence, Reorder, useDragControls } from 'motion/react';
+import { motion, AnimatePresence, Reorder, useDragControls, useMotionValue, useTransform, animate } from 'motion/react';
 import { 
   Plus, 
   Settings as SettingsIcon, 
@@ -532,7 +532,14 @@ const HabitCard = memo(({
       triggerHaptic('skipped', settings);
       onLog(habit.id!, 'skipped');
     }
-    setDragX(0);
+    
+    // Smoothly animate back to 0
+    animate(dragX, 0, {
+      type: "spring",
+      stiffness: 500,
+      damping: 30,
+      onUpdate: (latest) => setDragX(latest)
+    });
   };
 
   const toggleExpand = () => {
@@ -563,21 +570,78 @@ const HabitCard = memo(({
         className="glass-panel rounded-2xl p-2.5 mb-2 relative overflow-hidden group touch-none"
       >
         {/* Swipe Indicators */}
-        <div className={cn(
-          "absolute inset-y-0 left-0 w-16 flex items-center justify-center transition-opacity pointer-events-none",
-          dragX > 20 ? "opacity-100" : "opacity-0"
-        )}>
-          <Check className="w-6 h-6 animate-pulse" style={{ color: habit.color || 'var(--color-aura-glow)' }} />
-        </div>
-        <div className={cn(
-          "absolute inset-y-0 right-0 w-16 flex items-center justify-center transition-opacity pointer-events-none",
-          dragX < -20 ? "opacity-100" : "opacity-0"
-        )}>
-          <X className="w-6 h-6 text-amber-500 animate-pulse" />
+        <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-2xl">
+          {/* Complete Indicator (Left) */}
+          <motion.div 
+            className="absolute inset-y-0 left-0 w-full flex items-center justify-start pl-6"
+            style={{ 
+              opacity: dragX > 0 ? Math.min(dragX / 80, 1) : 0,
+              backgroundColor: dragX > 0 ? `rgba(16, 185, 129, ${Math.min(dragX / 400, 0.15)})` : 'transparent'
+            }}
+          >
+            <motion.div
+              style={{ 
+                x: dragX > 0 ? (dragX - 100) / 4 : -25,
+                scale: dragX > 100 ? 1.2 : 1,
+              }}
+              animate={{ 
+                scale: dragX > 100 ? [1.2, 1.3, 1.2] : 1.2,
+              }}
+              transition={{ repeat: dragX > 100 ? Infinity : 0, duration: 0.6 }}
+            >
+              <div className="relative">
+                <div 
+                  className="absolute inset-0 blur-xl opacity-50 rounded-full"
+                  style={{ backgroundColor: habit.color || '#10b981' }}
+                />
+                <Check 
+                  className="w-8 h-8 relative z-10" 
+                  style={{ 
+                    color: habit.color || '#10b981',
+                    filter: dragX > 100 ? `drop-shadow(0 0 10px ${habit.color || '#10b981'})` : 'none'
+                  }} 
+                />
+              </div>
+            </motion.div>
+          </motion.div>
+
+          {/* Skip Indicator (Right) */}
+          <motion.div 
+            className="absolute inset-y-0 right-0 w-full flex items-center justify-end pr-6"
+            style={{ 
+              opacity: dragX < 0 ? Math.min(-dragX / 80, 1) : 0,
+              backgroundColor: dragX < 0 ? `rgba(245, 158, 11, ${Math.min(-dragX / 400, 0.15)})` : 'transparent'
+            }}
+          >
+            <motion.div
+              style={{ 
+                x: dragX < 0 ? (dragX + 100) / 4 : 25,
+                scale: dragX < -100 ? 1.2 : 1,
+              }}
+              animate={{ 
+                scale: dragX < -100 ? [1.2, 1.3, 1.2] : 1.2,
+              }}
+              transition={{ repeat: dragX < -100 ? Infinity : 0, duration: 0.6 }}
+            >
+              <div className="relative">
+                <div className="absolute inset-0 blur-xl opacity-50 rounded-full bg-amber-500" />
+                <X 
+                  className="w-8 h-8 relative z-10 text-amber-500"
+                  style={{ 
+                    filter: dragX < -100 ? 'drop-shadow(0 0 10px #f59e0b)' : 'none'
+                  }}
+                />
+              </div>
+            </motion.div>
+          </motion.div>
         </div>
 
         <motion.div 
-          style={{ x: dragX }}
+          style={{ 
+            x: dragX,
+            rotate: dragX / 20,
+            scale: 1 - Math.min(Math.abs(dragX) / 1000, 0.05)
+          }}
           className="relative z-10"
         >
           <div className="flex items-center justify-between mb-1.5">
@@ -795,6 +859,59 @@ const HUDModal = ({
   const [goalDays, setGoalDays] = useState(initialHabit?.goalDays || 30);
   const [isStrict, setIsStrict] = useState(initialHabit?.isStrict || false);
   const [tab, setTab] = useState<'icons' | 'emojis' | 'custom'>('emojis');
+  const [isSuggested, setIsSuggested] = useState(false);
+  const [isKeyboardActive, setIsKeyboardActive] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Smart Suggestions Logic
+  useEffect(() => {
+    if (initialHabit || !name.trim()) {
+      setIsSuggested(false);
+      return;
+    }
+
+    const lowerName = name.toLowerCase();
+    const suggestions: Record<string, { icon: string, color: string, tab: 'icons' | 'emojis' }> = {
+      water: { icon: '💧', color: '#3366ff', tab: 'emojis' },
+      drink: { icon: '💧', color: '#3366ff', tab: 'emojis' },
+      hydrate: { icon: '💧', color: '#3366ff', tab: 'emojis' },
+      gym: { icon: 'Dumbbell', color: '#ff3366', tab: 'icons' },
+      workout: { icon: 'Dumbbell', color: '#ff3366', tab: 'icons' },
+      lift: { icon: 'Dumbbell', color: '#ff3366', tab: 'icons' },
+      exercise: { icon: 'Activity', color: '#ff3366', tab: 'icons' },
+      read: { icon: '📚', color: '#ffcc00', tab: 'emojis' },
+      book: { icon: '📚', color: '#ffcc00', tab: 'emojis' },
+      study: { icon: 'Book', color: '#ffcc00', tab: 'icons' },
+      code: { icon: 'Code', color: '#00ffcc', tab: 'icons' },
+      dev: { icon: 'Laptop', color: '#00ffcc', tab: 'icons' },
+      work: { icon: 'Zap', color: '#00ffcc', tab: 'icons' },
+      meditate: { icon: '🧘', color: '#cc00ff', tab: 'emojis' },
+      yoga: { icon: '🧘', color: '#cc00ff', tab: 'emojis' },
+      zen: { icon: 'Brain', color: '#cc00ff', tab: 'icons' },
+      run: { icon: '🏃', color: '#00ff99', tab: 'emojis' },
+      walk: { icon: '🏃', color: '#00ff99', tab: 'emojis' },
+      bike: { icon: 'Bike', color: '#00ff99', tab: 'icons' },
+      sleep: { icon: 'Moon', color: '#6600ff', tab: 'icons' },
+      rest: { icon: '🛌', color: '#6600ff', tab: 'emojis' },
+      food: { icon: 'Utensils', color: '#ff6600', tab: 'icons' },
+      eat: { icon: '🥗', color: '#ff6600', tab: 'emojis' },
+      art: { icon: 'Palette', color: '#ff99cc', tab: 'icons' },
+      paint: { icon: 'Palette', color: '#ff99cc', tab: 'icons' },
+      music: { icon: 'Music', color: '#ff3366', tab: 'icons' },
+      guitar: { icon: 'Music', color: '#ff3366', tab: 'icons' },
+    };
+
+    for (const [key, value] of Object.entries(suggestions)) {
+      if (lowerName.includes(key)) {
+        setIcon(value.icon);
+        setColor(value.color);
+        setTab(value.tab);
+        setIsSuggested(true);
+        return;
+      }
+    }
+    setIsSuggested(false);
+  }, [name, initialHabit]);
 
   useEffect(() => {
     if (initialHabit) {
@@ -833,12 +950,19 @@ const HUDModal = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
-      <motion.div 
-        initial={{ scale: 0.9, opacity: 0, y: 20 }}
-        animate={{ scale: 1, opacity: 1, y: 0 }}
-        className="glass-panel w-full max-w-sm rounded-[2rem] p-6 relative"
-      >
+    <div 
+      ref={scrollRef}
+      className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm overflow-y-auto"
+    >
+      <div className={cn(
+        "flex min-h-full items-start justify-center p-4 sm:items-center transition-all duration-500",
+        isKeyboardActive ? "pb-[80vh]" : "pb-4"
+      )}>
+        <motion.div 
+          initial={{ scale: 0.9, opacity: 0, y: 20 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          className="glass-panel w-full max-w-sm rounded-[2rem] p-6 relative mt-4 sm:my-8"
+        >
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold tracking-tight uppercase">
             {initialHabit ? 'Edit Protocol' : 'New Protocol'}
@@ -850,13 +974,30 @@ const HUDModal = ({
 
         <div className="space-y-6">
           <div className="space-y-2">
-            <label className="text-[12px] uppercase tracking-[0.2em] font-bold opacity-40">Protocol Identity</label>
+            <div className="flex justify-between items-center">
+              <label className="text-[12px] uppercase tracking-[0.2em] font-bold opacity-40">Protocol Identity</label>
+              {isSuggested && (
+                <motion.span 
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="text-[8px] font-black uppercase tracking-widest text-aura-glow bg-aura-glow/10 px-2 py-0.5 rounded-full border border-aura-glow/20"
+                >
+                  Neural Suggestion Active
+                </motion.span>
+              )}
+            </div>
             <input 
               value={name}
               onChange={(e) => setName(e.target.value)}
-              onFocus={(e) => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+              onFocus={(e) => {
+                setIsKeyboardActive(true);
+                setTimeout(() => {
+                  e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 600);
+              }}
+              onBlur={() => setIsKeyboardActive(false)}
               placeholder="e.g. Neural Link Deep Work"
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-aura-glow/50 transition-colors font-medium"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-4 outline-none focus:border-aura-glow/50 transition-colors font-medium"
             />
           </div>
 
@@ -959,15 +1100,43 @@ const HUDModal = ({
                 type="color" 
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
+                onFocus={(e) => {
+                  setIsKeyboardActive(true);
+                  setTimeout(() => {
+                    e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }, 600);
+                }}
+                onBlur={() => setIsKeyboardActive(false)}
                 className="w-6 h-6 bg-transparent border-none cursor-pointer"
               />
             </div>
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             <div className="flex justify-between">
               <label className="text-[12px] uppercase tracking-[0.2em] font-bold opacity-40">Intensity Throttle</label>
               <span className="text-xs font-mono text-aura-glow">{intensity}%</span>
+            </div>
+            <div className="flex gap-2 mb-1">
+              {[
+                { label: 'Low', val: 25 },
+                { label: 'Mid', val: 50 },
+                { label: 'High', val: 75 },
+                { label: 'Elite', val: 100 }
+              ].map(p => (
+                <button
+                  key={p.label}
+                  onClick={() => setIntensity(p.val)}
+                  className={cn(
+                    "flex-1 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all border",
+                    intensity === p.val 
+                      ? "bg-aura-glow/20 border-aura-glow text-aura-glow" 
+                      : "bg-white/5 border-white/10 text-white/40 hover:bg-white/10"
+                  )}
+                >
+                  {p.label}
+                </button>
+              ))}
             </div>
             <input 
               type="range" 
@@ -975,7 +1144,14 @@ const HUDModal = ({
               max="100" 
               value={intensity}
               onChange={(e) => setIntensity(parseInt(e.target.value))}
-              className="w-full"
+              onFocus={(e) => {
+                setIsKeyboardActive(true);
+                setTimeout(() => {
+                  e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 600);
+              }}
+              onBlur={() => setIsKeyboardActive(false)}
+              className="w-full h-8"
             />
           </div>
 
@@ -990,7 +1166,14 @@ const HUDModal = ({
               max="365" 
               value={goalDays}
               onChange={(e) => setGoalDays(parseInt(e.target.value))}
-              className="w-full"
+              onFocus={(e) => {
+                setIsKeyboardActive(true);
+                setTimeout(() => {
+                  e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 600);
+              }}
+              onBlur={() => setIsKeyboardActive(false)}
+              className="w-full h-8"
             />
           </div>
 
@@ -1026,6 +1209,7 @@ const HUDModal = ({
         </div>
       </motion.div>
     </div>
+  </div>
   );
 };
 
