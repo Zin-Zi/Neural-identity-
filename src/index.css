@@ -10,6 +10,9 @@
 }
 
 @layer base {
+  html {
+    font-size: 17px;
+  }
   body {
     @apply bg-vantablack text-white font-sans antialiased overflow-x-hidden;
     background-image: 
