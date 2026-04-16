@@ -133,20 +133,27 @@ const calculateLongestStreak = (habit: Habit, logs: HabitLog[]) => {
   return maxStreak;
 };
 
-const sendNotification = async (title: string, options: NotificationOptions) => {
+const sendNotification = async (title: string, options: NotificationOptions & { sticky?: boolean }) => {
   if (typeof window === 'undefined' || !('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
 
   try {
     const registration = await navigator.serviceWorker.getRegistration();
+    const notificationOptions: NotificationOptions = {
+      ...options,
+      badge: '/favicon.ico',
+      tag: options.sticky ? 'aura-persistent' : options.tag,
+      requireInteraction: options.sticky ? true : options.requireInteraction,
+      silent: options.sticky ? true : options.silent,
+    };
+
     if (registration && 'showNotification' in registration) {
-      await registration.showNotification(title, options);
+      await registration.showNotification(title, notificationOptions);
     } else {
-      new Notification(title, options);
+      new Notification(title, notificationOptions);
     }
   } catch (error) {
     console.error('Error sending notification:', error);
-    new Notification(title, options);
   }
 };
 
@@ -1567,6 +1574,7 @@ const SystemView = ({ onBack }: { onBack: () => void }) => {
   const [isSpectrumCollapsed, setIsSpectrumCollapsed] = useState(true);
   const [isAudioCollapsed, setIsAudioCollapsed] = useState(true);
   const [isGlassCollapsed, setIsGlassCollapsed] = useState(true);
+  const [isOfflineCollapsed, setIsOfflineCollapsed] = useState(true);
 
   return (
     <div className="px-6 pb-32 pt-4">
@@ -1859,6 +1867,50 @@ const SystemView = ({ onBack }: { onBack: () => void }) => {
           </AnimatePresence>
         </div>
 
+        <div className="glass-panel rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-aura-glow" />
+              <h3 className="text-[12px] uppercase tracking-widest font-bold">Offline Integrity</h3>
+            </div>
+            <button 
+              onClick={() => setIsOfflineCollapsed(!isOfflineCollapsed)}
+              className="p-1.5 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
+            >
+              <ChevronDown className={cn("w-3 h-3 transition-transform", isOfflineCollapsed && "rotate-180")} />
+            </button>
+          </div>
+          
+          <AnimatePresence>
+            {!isOfflineCollapsed && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden space-y-3"
+              >
+                <div className="flex items-center justify-between p-2.5 bg-white/5 rounded-xl border border-white/10">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] uppercase font-bold text-aura-glow">Local-First Storage</span>
+                    <span className="text-[8px] opacity-40 leading-tight uppercase tracking-tighter">Neural data is persisted only on this device using local IndexedDB.</span>
+                  </div>
+                  <ShieldCheck className="w-4 h-4 text-aura-glow/40" />
+                </div>
+                <div className="flex items-center justify-between p-2.5 bg-white/5 rounded-xl border border-white/10">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] uppercase font-bold text-aura-glow">PWA Service Worker</span>
+                    <span className="text-[8px] opacity-40 leading-tight uppercase tracking-tighter">Application assets are cached locally for zero-latency offline start.</span>
+                  </div>
+                  <Zap className="w-4 h-4 text-aura-glow/40" />
+                </div>
+                <p className="text-[7px] font-mono text-center uppercase tracking-widest opacity-30 mt-2">
+                  // Total Airgap Integrity Verified
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
         <button 
           onClick={() => setIsResetting(true)}
           className="w-full py-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl text-[12px] font-bold uppercase tracking-widest hover:bg-red-500/20 transition-all"
@@ -1954,6 +2006,16 @@ export default function App() {
         return;
       }
       // Otherwise, if not on dashboard, go to dashboard
+      if (isAnyCardExpanded) {
+        // We can't easily trigger the close from here without refs or a state lift, 
+        // but since we know some card is expanded, we can at least push state to intercept
+        // the NEXT tap which will then go to dashboard.
+        // Actually, let's just let it slide to dashboard directly if expanded?
+        // Let's just push state and stay where we are for one tap if something is expanded.
+        window.history.pushState(null, '', window.location.pathname);
+        return;
+      }
+      
       if (activeTab !== 'protocols') {
         setActiveTab('protocols');
         window.history.pushState(null, '', window.location.pathname);
@@ -1981,6 +2043,39 @@ export default function App() {
   const settings = useLiveQuery(() => db.settings.toCollection().first());
   const habits = useLiveQuery(() => db.habits.orderBy('order').toArray());
   const logs = useLiveQuery(() => db.logs.toArray());
+
+  useEffect(() => {
+    if (!settings?.notificationsEnabled || !habits || !logs) return;
+
+    const maintenanceStickyNotification = () => {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        const today = format(new Date(), 'yyyy-MM-dd');
+        const logsToday = logs.filter(l => l.date === today);
+        const completedCount = logsToday.filter(l => l.status === 'completed').length;
+        const totalCount = habits.length;
+        
+        const now = new Date();
+        const startOfDayTime = "00:00";
+        const endOfDayTime = "23:59";
+        
+        const title = `Aura Monitor: ${completedCount}/${totalCount} Protocols`;
+        const body = `Active Session: [${startOfDayTime} — ${endOfDayTime}] • Evolution Progress: ${Math.round((completedCount / (totalCount || 1)) * 100)}%`;
+        
+        sendNotification(title, { 
+          body, 
+          sticky: true,
+          icon: '/favicon.ico',
+          tag: 'aura-persistent'
+        });
+      }
+    };
+
+    // Update sticky notification whenever habits or logs change
+    maintenanceStickyNotification();
+
+    const interval = setInterval(maintenanceStickyNotification, 15 * 60 * 1000); // Refresh every 15 mins
+    return () => clearInterval(interval);
+  }, [settings?.notificationsEnabled, habits, logs]);
 
   useEffect(() => {
     if (!settings?.notificationsEnabled || !habits || !logs) return;

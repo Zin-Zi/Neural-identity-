@@ -27,26 +27,19 @@ async function startServer() {
     next();
   });
 
-  // Serve Service Worker with absolute priority and standard naming
-  app.get('/sw.js', (req, res) => {
-    console.log(`[SW_DEBUG] Request for /sw.js. Headers:`, JSON.stringify(req.headers));
-    
-    const swPath = path.resolve(__dirname, 'public/sw.js');
-    const distSwPath = path.resolve(__dirname, 'dist/sw.js');
-    const finalPath = fs.existsSync(distSwPath) ? distSwPath : swPath;
-
-    if (fs.existsSync(finalPath)) {
-      console.log(`[SW_DEBUG] Serving SW from: ${finalPath}`);
-      res.setHeader('Content-Type', 'application/javascript');
-      res.setHeader('Service-Worker-Allowed', '/');
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      return res.sendFile(finalPath);
-    } else {
-      console.error(`[SW_DEBUG] SW file not found at ${swPath} or ${distSwPath}`);
+  // Serve Service Worker with absolute priority and standard naming in production
+  if (process.env.NODE_ENV === 'production') {
+    app.get('/sw.js', (req, res) => {
+      const distSwPath = path.resolve(__dirname, 'dist/sw.js');
+      if (fs.existsSync(distSwPath)) {
+        res.setHeader('Content-Type', 'application/javascript');
+        res.setHeader('Service-Worker-Allowed', '/');
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        return res.sendFile(distSwPath);
+      }
       res.status(404).send('Service Worker not found');
-    }
-  });
+    });
+  }
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
