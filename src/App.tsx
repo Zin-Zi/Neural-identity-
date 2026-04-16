@@ -1705,6 +1705,13 @@ export default function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
   const [celebrationHabit, setCelebrationHabit] = useState<Habit | null>(null);
+  const [lastBackPress, setLastBackPress] = useState(0);
+  const [showExitToast, setShowExitToast] = useState(false);
+
+  useEffect(() => {
+    // Push initial state to handle back button
+    window.history.pushState(null, '', window.location.pathname);
+  }, []);
   const [expandedHabits, setExpandedHabits] = useState<Set<number>>(new Set());
   const [showStats, setShowStats] = useState(false);
 
@@ -1748,26 +1755,44 @@ export default function App() {
       // If any overlay is open, close it first
       if (celebrationHabit) {
         setCelebrationHabit(null);
+        window.history.pushState(null, '', window.location.pathname);
         return;
       }
       if (isModalOpen) {
         setIsModalOpen(false);
         setEditingHabit(null);
+        window.history.pushState(null, '', window.location.pathname);
         return;
       }
       if (showStats) {
         setShowStats(false);
+        window.history.pushState(null, '', window.location.pathname);
         return;
       }
       // Otherwise, if not on dashboard, go to dashboard
       if (activeTab !== 'protocols') {
         setActiveTab('protocols');
+        window.history.pushState(null, '', window.location.pathname);
+        return;
+      }
+
+      // Double tap to exit logic
+      const now = Date.now();
+      if (now - lastBackPress < 2000) {
+        // Allow the back event to proceed (which might exit the app context)
+        // We don't push state here.
+      } else {
+        setLastBackPress(now);
+        setShowExitToast(true);
+        setTimeout(() => setShowExitToast(false), 2000);
+        // Push state back to prevent exit on first tap
+        window.history.pushState(null, '', window.location.pathname);
       }
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [activeTab, isModalOpen, showStats, celebrationHabit]);
+  }, [activeTab, isModalOpen, showStats, celebrationHabit, lastBackPress]);
   
   const settings = useLiveQuery(() => db.settings.toCollection().first());
   const habits = useLiveQuery(() => db.habits.orderBy('order').toArray());
@@ -1924,12 +1949,8 @@ export default function App() {
                   <Crown className="w-5 h-5 text-aura-glow" />
                 </div>
                 <div className="flex flex-col">
-                  <div className="flex items-center gap-2">
-                    <Typewriter text={settings?.userName || "Thant Zin Aung"} className="text-sm opacity-80" />
-                    <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-white/5 border border-white/10">
-                      <div className="w-1 h-1 rounded-full bg-white/20" />
-                      <span className="text-[8px] font-black uppercase tracking-tighter text-white/40">Neural Link Active</span>
-                    </div>
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <Typewriter text={settings?.userName || "Thant Zin Aung"} className="text-sm opacity-80 whitespace-nowrap" />
                   </div>
                   <span className="text-[10px] font-mono uppercase tracking-widest opacity-40">Aura Level: Elite</span>
                 </div>
@@ -2185,6 +2206,20 @@ export default function App() {
         onSave={handleSaveHabit}
         initialHabit={editingHabit}
       />
+
+      {/* Exit Toast */}
+      <AnimatePresence>
+        {showExitToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 bg-white/10 backdrop-blur-md border border-white/20 rounded-full text-[10px] font-bold uppercase tracking-widest text-white/80"
+          >
+            Press back again to exit
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
