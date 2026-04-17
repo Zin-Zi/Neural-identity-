@@ -1943,25 +1943,17 @@ export default function App() {
   const [celebrationHabit, setCelebrationHabit] = useState<Habit | null>(null);
   const [lastBackPress, setLastBackPress] = useState(0);
   const [showExitToast, setShowExitToast] = useState(false);
-
-  useEffect(() => {
-    // Push initial state to handle back button
-    window.history.pushState(null, '', window.location.pathname);
-  }, []);
   const [expandedHabits, setExpandedHabits] = useState<Set<number>>(new Set());
   const [showStats, setShowStats] = useState(false);
-
-  const isAnyCardExpanded = expandedHabits.size > 0;
-
   const [isKeyboardActive, setIsKeyboardActive] = useState(false);
   const [quoteIndex, setQuoteIndex] = useState(0);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setQuoteIndex(prev => (prev + 1) % QUOTES.length);
-    }, 15000);
-    return () => clearInterval(interval);
-  }, []);
+  const isModalOpenRef = useRef(isModalOpen);
+  const celebrationHabitRef = useRef(celebrationHabit);
+  const showStatsRef = useRef(showStats);
+  const activeTabRef = useRef(activeTab);
+  const lastBackPressRef = useRef(lastBackPress);
+  const expandedHabitsRef = useRef(expandedHabits);
 
   const handleExpandChange = (id: number, expanded: boolean) => {
     setExpandedHabits(prev => {
@@ -1973,72 +1965,75 @@ export default function App() {
   };
 
   useEffect(() => {
-    setExpandedHabits(new Set());
-    
-    // Handle history state for back button navigation
-    if (activeTab !== 'protocols' || isModalOpen || showStats || celebrationHabit) {
-      window.history.pushState({ 
-        tab: activeTab, 
-        modal: isModalOpen, 
-        stats: showStats,
-        celebration: !!celebrationHabit
-      }, '');
-    }
-  }, [activeTab, isModalOpen, showStats, celebrationHabit]);
+    const interval = setInterval(() => {
+      setQuoteIndex(prev => (prev + 1) % QUOTES.length);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => { isModalOpenRef.current = isModalOpen; }, [isModalOpen]);
+  useEffect(() => { celebrationHabitRef.current = celebrationHabit; }, [celebrationHabit]);
+  useEffect(() => { showStatsRef.current = showStats; }, [showStats]);
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+  useEffect(() => { lastBackPressRef.current = lastBackPress; }, [lastBackPress]);
+  useEffect(() => { expandedHabitsRef.current = expandedHabits; }, [expandedHabits]);
+
+  const isAnyCardExpanded = expandedHabits.size > 0;
 
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
-      // If any overlay is open, close it first
-      if (celebrationHabit) {
+      // Prevents the default browser back action
+      const isAnyCardExpanded = expandedHabitsRef.current.size > 0;
+      
+      // If any of these are true, we are handling the back button internally
+      let handled = false;
+
+      if (celebrationHabitRef.current) {
         setCelebrationHabit(null);
-        window.history.pushState(null, '', window.location.pathname);
-        return;
-      }
-      if (isModalOpen) {
+        handled = true;
+      } else if (isModalOpenRef.current) {
         setIsModalOpen(false);
         setEditingHabit(null);
-        window.history.pushState(null, '', window.location.pathname);
-        return;
-      }
-      if (showStats) {
+        handled = true;
+      } else if (showStatsRef.current) {
         setShowStats(false);
-        window.history.pushState(null, '', window.location.pathname);
-        return;
-      }
-      // Otherwise, if not on dashboard, go to dashboard
-      if (isAnyCardExpanded) {
-        // We can't easily trigger the close from here without refs or a state lift, 
-        // but since we know some card is expanded, we can at least push state to intercept
-        // the NEXT tap which will then go to dashboard.
-        // Actually, let's just let it slide to dashboard directly if expanded?
-        // Let's just push state and stay where we are for one tap if something is expanded.
-        window.history.pushState(null, '', window.location.pathname);
-        return;
-      }
-      
-      if (activeTab !== 'protocols') {
+        handled = true;
+      } else if (isAnyCardExpanded) {
+        // Reset expanded cards
+        setExpandedHabits(new Set());
+        handled = true;
+      } else if (activeTabRef.current !== 'protocols') {
         setActiveTab('protocols');
-        window.history.pushState(null, '', window.location.pathname);
-        return;
+        handled = true;
       }
 
-      // Double tap to exit logic
-      const now = Date.now();
-      if (now - lastBackPress < 2000) {
-        // Allow the back event to proceed (which might exit the app context)
-        // We don't push state here.
-      } else {
-        setLastBackPress(now);
-        setShowExitToast(true);
-        setTimeout(() => setShowExitToast(false), 2000);
-        // Push state back to prevent exit on first tap
+      if (handled) {
+        // We intercepted a back action, so we must push the state back to keep the interceptor alive
         window.history.pushState(null, '', window.location.pathname);
+      } else {
+        // We are on the dashboard with nothing open - handle double-exit
+        const now = Date.now();
+        if (now - lastBackPressRef.current < 2000) {
+          // Allow exit - do not pushState. The browser will now have nothing to pop in our app
+          // and will exit or go back to previous site.
+        } else {
+          setLastBackPress(now);
+          setShowExitToast(true);
+          setTimeout(() => setShowExitToast(false), 2000);
+          // Push state back to stay in app
+          window.history.pushState(null, '', window.location.pathname);
+        }
       }
     };
 
+    // Initial push to arm the interceptor
+    if (!window.history.state || window.history.state !== 'aura-armed') {
+      window.history.pushState('aura-armed', '', window.location.pathname);
+    }
+
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [activeTab, isModalOpen, showStats, celebrationHabit, lastBackPress]);
+  }, []);
   
   const settings = useLiveQuery(() => db.settings.toCollection().first());
   const habits = useLiveQuery(() => db.habits.orderBy('order').toArray());
